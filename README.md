@@ -50,7 +50,7 @@ The permission set is **always regenerated from scratch** so it stays aligned wi
 | Permission Type          | Scope                                                        | Access Granted                                                                 |
 |--------------------------|--------------------------------------------------------------|--------------------------------------------------------------------------------|
 | `objectPermissions`      | All permissionable objects in the org                        | `allowRead=true`, `allowCreate=true`                                           |
-| `fieldPermissions`       | All permissionable fields on those objects                   | `readable=true`; `editable=true` for all permissionable fields                  |
+| `fieldPermissions`       | All permissionable fields on those objects                   | `readable=true`; `editable=true` for all permissionable fields — including read-only field types; this is valid and the permission set will deploy |
 | `recordTypeVisibilities` | All record types on included objects (including PersonAccount) | `visible=true`                                                                 |
 | `userPermissions`        | Configured user-level permissions in `USER_PERMISSION_NAMES` | `enabled=true`                                                                  |
 
@@ -559,7 +559,7 @@ The script executes four sequential phases against the target org's APIs:
 
 - **Full regeneration** — The XML file is always written from scratch, not patched, ensuring the output always reflects the current org state.
 - **Keyset pagination** — Large object surfaces are fetched with deterministic, ordered pagination (`ORDER BY` + `> lastValue`) in `QUERY_PAGE_SIZE` chunks, reducing query count and complexity.
-- **Permissionable-first field access** — Any field returned as `IsPermissionable=true` is emitted with `readable=true` and `editable=true` to maximize backup/restore coverage, including formula and other non-writable field types.
+- **Permissionable-first field access** — Any field returned as `IsPermissionable=true` is emitted with `readable=true` and `editable=true`, including formula fields and other non-writable field types. Salesforce deployment validation checks metadata structural validity, not end-to-end field writability, so the permission set deploys cleanly regardless.
 - **Compound compatibility guard** — `EntityParticle.IsComponent=true` fields are excluded so generated `fieldPermissions` only contain valid field names Salesforce accepts during deployment.
 - **PersonAccount normalization** — `Account.PersonAccount` record types are normalized to `PersonAccount.PersonAccount` as required by permission set XML format.
 - **No external dependencies** — Uses only the Python standard library (`urllib`, `xml.etree`, `json`, `subprocess`, etc.) to simplify CI/CD setup.
