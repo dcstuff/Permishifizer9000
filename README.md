@@ -22,6 +22,7 @@ Generate a **SalesforceBackup** permission set XML from live org metadata — en
     - [Excluding Additional Objects](#excluding-additional-objects)
     - [Supplementing Object Permissions](#supplementing-object-permissions)
     - [Supplementing Field Queries](#supplementing-field-queries)
+    - [Supplementing Individual Field Permissions](#supplementing-individual-field-permissions)
     - [Configuring User Permissions](#configuring-user-permissions)
   - [Output](#output)
     - [Console Output](#console-output)
@@ -50,7 +51,7 @@ The permission set is **always regenerated from scratch** so it stays aligned wi
 | Permission Type          | Scope                                                        | Access Granted                                                                 |
 |--------------------------|--------------------------------------------------------------|--------------------------------------------------------------------------------|
 | `objectPermissions`      | All permissionable objects in the org                        | `allowRead=true`, `allowCreate=true`                                           |
-| `fieldPermissions`       | All permissionable fields on those objects                   | `readable=true`; `editable=true` for all permissionable fields — including read-only field types; this is valid and the permission set will deploy |
+| `fieldPermissions`       | All permissionable fields on those objects                   | `readable=true`; `editable=true` for all permissionable fields                  |
 | `recordTypeVisibilities` | All record types on included objects (including PersonAccount) | `visible=true`                                                                 |
 | `userPermissions`        | Configured user-level permissions in `USER_PERMISSION_NAMES` | `enabled=true`                                                                  |
 
@@ -134,7 +135,7 @@ sf org assign permset --name SalesforceBackup --target-org myOrgAlias
 ### Command-Line Reference
 
 ```
-usage: permishifizer9000.py [-h] [--target-org TARGET_ORG] [--output-file OUTPUT_FILE] [--api-version API_VERSION] [--deploy] [--deploy-wait DEPLOY_WAIT] [target_org]
+usage: permishifizer9000.py [-h] [--target-org TARGET_ORG] [--output-file OUTPUT_FILE] [--deploy] [--deploy-wait DEPLOY_WAIT] [target_org]
 
 positional arguments:
   target_org              Optional Salesforce org alias/username (convenience shorthand)
@@ -145,14 +146,12 @@ options:
                           Salesforce org alias/username (preferred for CI/CD; same meaning as positional target_org)
   --output-file OUTPUT_FILE, -f OUTPUT_FILE
                           Output permission set XML path (default: force-app/main/default/permissionsets/SalesforceBackup.permissionset-meta.xml)
-  --api-version API_VERSION, -v API_VERSION
-                          Salesforce API version to use for all requests (default: 66.0)
   --deploy, -d            Automatically deploy the generated permission set after writing it
   --deploy-wait DEPLOY_WAIT, -w DEPLOY_WAIT
                           Minutes to wait for deployment completion when using --deploy (default: 10). Must be >= 1.
 ```
 
-Short-flag note: this project maps `-o` to `--target-org`, `-f` to `--output-file`, and `-v` to `--api-version`.
+Short-flag note: this project maps `-o` to `--target-org` and `-f` to `--output-file`.
 
 ### Target Org Resolution
 
@@ -226,15 +225,28 @@ These names are merged into the Step 1 result set before the cross-reference aga
 
 ### Supplementing Field Queries
 
-Some objects have permissionable fields that are not indexed in the `EntityParticle` Tooling API table the script queries in Step 3. For these objects, the script falls back to querying `FieldDefinition` one object at a time. Edit the `FIELD_QUERY_SUPPLEMENTAL_OBJECTS` list in the script to add or remove objects that need this treatment:
+Some objects have permissionable fields that are not indexed in the `EntityParticle` Tooling API table the script queries in Step 3, or are filtered out of the EntityParticle scan because `EntityDefinition.IsFlsEnabled = false` even though they have permissionable custom fields (for example `User`, whose standard fields are governed by user-management permissions rather than the `<fieldPermissions>` framework). For these objects, the script falls back to querying `FieldDefinition` one object at a time. Edit the `FIELD_QUERY_SUPPLEMENTAL_OBJECTS` list in the script to add or remove objects that need this treatment:
 
 ```python
 FIELD_QUERY_SUPPLEMENTAL_OBJECTS = [
     "EmailMessage",
+    "User",
 ]
 ```
 
 Fields returned for these objects are added to the generated `fieldPermissions` alongside the regular EntityParticle results.
+
+### Supplementing Individual Field Permissions
+
+A small number of fields are valid in `fieldPermissions` (and selectable in the Salesforce permission set UI) but are not returned by either `EntityParticle` or `FieldDefinition` — for example `DisputeItemChargeBack.CardBrand`. Add fully-qualified field API names to `FIELD_PERMISSION_SUPPLEMENTAL_FIELDS` in the script to inject them verbatim:
+
+```python
+FIELD_PERMISSION_SUPPLEMENTAL_FIELDS = {
+    "DisputeItemChargeBack.CardBrand",
+}
+```
+
+Each entry must use the `Object.Field` format. Entries whose parent object is excluded (event objects, predefined exclusions) are skipped.
 
 ### Configuring User Permissions
 
@@ -559,7 +571,7 @@ The script executes four sequential phases against the target org's APIs:
 
 - **Full regeneration** — The XML file is always written from scratch, not patched, ensuring the output always reflects the current org state.
 - **Keyset pagination** — Large object surfaces are fetched with deterministic, ordered pagination (`ORDER BY` + `> lastValue`) in `QUERY_PAGE_SIZE` chunks, reducing query count and complexity.
-- **Permissionable-first field access** — Any field returned as `IsPermissionable=true` is emitted with `readable=true` and `editable=true`, including formula fields and other non-writable field types. Salesforce deployment validation checks metadata structural validity, not end-to-end field writability, so the permission set deploys cleanly regardless.
+- **Permissionable-first field access** — Any field returned as `IsPermissionable=true` is emitted with `readable=true` and `editable=true` to maximize backup/restore coverage, including formula and other non-writable field types.
 - **Compound compatibility guard** — `EntityParticle.IsComponent=true` fields are excluded so generated `fieldPermissions` only contain valid field names Salesforce accepts during deployment.
 - **PersonAccount normalization** — `Account.PersonAccount` record types are normalized to `PersonAccount.PersonAccount` as required by permission set XML format.
 - **No external dependencies** — Uses only the Python standard library (`urllib`, `xml.etree`, `json`, `subprocess`, etc.) to simplify CI/CD setup.
@@ -589,10 +601,10 @@ These constants can be modified at the top of `permishifizer9000.py`:
 | `PERMSET_LABEL`              | `"Salesforce Backup"`             | Display label of the permission set                            |
 | `PERMSET_DESC`               | *(see source)*                    | Description embedded in the permission set XML                 |
 | `DEFAULT_PERMSET_FILE`       | `./force-app/main/.../SalesforceBackup.permissionset-meta.xml` | Default output path              |
-| `DEFAULT_API_VERSION`        | `"66.0"`                          | Salesforce API version used for all requests (overridable via `--api-version`) |
 | `EXCLUDED_OBJECT_API_NAMES`  | `set()` (empty)                   | Set of object API names to exclude from `objectPermissions`, `fieldPermissions`, and `recordTypeVisibilities` (does not affect `userPermissions`) |
 | `OBJECT_PERMISSION_SUPPLEMENTAL_OBJECTS` | `{"Task", "Event"}`    | Objects valid for `objectPermissions` but missing from the PicklistValueInfo query; merged into the Step 1 result set before cross-referencing |
-| `FIELD_QUERY_SUPPLEMENTAL_OBJECTS` | `["EmailMessage"]`          | Objects whose permissionable fields are not indexed in EntityParticle; their fields are fetched individually via FieldDefinition at the end of Step 3 |
+| `FIELD_QUERY_SUPPLEMENTAL_OBJECTS` | `["EmailMessage", "User"]` | Objects whose permissionable fields are not indexed in EntityParticle (or whose parent object reports `IsFlsEnabled = false`, e.g. `User`); their fields are fetched individually via FieldDefinition at the end of Step 3 |
+| `FIELD_PERMISSION_SUPPLEMENTAL_FIELDS` | `{"DisputeItemChargeBack.CardBrand"}` | Fully-qualified field API names (`Object.Field`) injected verbatim into `fieldPermissions`; use for fields valid in permission sets but absent from both EntityParticle and FieldDefinition |
 | `USER_PERMISSION_NAMES`      | *(see source)*                    | Set of user permission API names emitted as `userPermissions` entries |
 | `BATCH_SIZE`                 | `50`                              | Number of objects per EntityParticle query batch                |
 | `QUERY_PAGE_SIZE`            | `2000`                            | Page size for PicklistValueInfo and EntityDefinition keyset pagination |

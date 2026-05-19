@@ -36,7 +36,6 @@ DEFAULT_PERMSET_FILE = (
     / "permissionsets"
     / f"{PERMSET_NAME}.permissionset-meta.xml"
 )
-DEFAULT_API_VERSION = "66.0"
 
 XMLNS = "http://soap.sforce.com/2006/04/metadata"
 ET.register_namespace("", XMLNS)
@@ -50,7 +49,18 @@ OBJECT_PERMISSION_SUPPLEMENTAL_OBJECTS = {"Task", "Event"}
 
 FIELD_QUERY_SUPPLEMENTAL_OBJECTS = [
     "EmailMessage",
+    "User",
 ]
+
+# Fully-qualified field API names (Object.Field) that are valid in
+# fieldPermissions but are not returned by EntityParticle or FieldDefinition
+# queries. They are still permissionable through the Salesforce permission
+# set UI. Each entry is injected verbatim into fieldPermissions provided
+# its parent object is not excluded.
+FIELD_PERMISSION_SUPPLEMENTAL_FIELDS = {
+    "DisputeItemChargeBack.CardBrand",
+    "Idea.Attachment",
+}
 
 USER_PERMISSION_NAMES = {
     "AllowViewEditConvertedLeads",
@@ -158,15 +168,6 @@ def parse_args():
         help=(
             "Output permission set XML path. "
             f"Default: {DEFAULT_PERMSET_FILE}"
-        ),
-    )
-    parser.add_argument(
-        "--api-version",
-        "-v",
-        default=DEFAULT_API_VERSION,
-        help=(
-            "Salesforce API version to use for all requests. "
-            f"Default: {DEFAULT_API_VERSION}"
         ),
     )
     parser.add_argument(
@@ -764,7 +765,6 @@ def main():
     args = parse_args()
     output_file = args.output_file.expanduser().resolve()
     target_org = resolve_target_org(args)
-    api_version = args.api_version
 
     if args.deploy and args.deploy_wait < 1:
         die("Error: --deploy-wait must be 1 or greater.")
@@ -802,9 +802,18 @@ def main():
 
     access_token = result.get("accessToken", "")
     instance_url = result.get("instanceUrl", "").rstrip("/")
+    api_version = str(result.get("apiVersion", "") or "").strip()
 
     if not access_token or not instance_url:
         die("Error: Could not extract accessToken/instanceUrl from org info.\n  Run: sf org login web")
+
+    if not api_version:
+        die(
+            "Error: Could not determine the org's API version from `sf org display`.\n"
+            "  Ensure the Salesforce CLI is up to date and the org is reachable."
+        )
+
+    print(f"Using org API version: {api_version}")
 
     org = OrgContext(
         access_token=access_token,
@@ -944,6 +953,40 @@ def main():
             if not obj_name or not field_name:
                 continue
             permissionable_fields.add(f"{obj_name}.{field_name}")
+
+    # Inject explicitly-listed supplemental fields that are valid in
+    # fieldPermissions but absent from both EntityParticle and FieldDefinition
+    # (for example DisputeItemChargeBack.CardBrand). Entries whose parent
+    # object is excluded or not present in the org are skipped so the
+    # generated permission set always deploys cleanly.
+    if FIELD_PERMISSION_SUPPLEMENTAL_FIELDS:
+        injected = 0
+        skipped_missing = []
+        for field_api in FIELD_PERMISSION_SUPPLEMENTAL_FIELDS:
+            if "." not in field_api:
+                continue
+            obj_name = field_api.split(".", 1)[0]
+            if is_excluded_object(obj_name):
+                continue
+            if obj_name not in all_entity_def_names:
+                skipped_missing.append(field_api)
+                continue
+            if field_api not in permissionable_fields:
+                permissionable_fields.add(field_api)
+                injected += 1
+        if injected:
+            print(
+                f"\n         Injected {injected} supplemental field(s) from "
+                "FIELD_PERMISSION_SUPPLEMENTAL_FIELDS.",
+                flush=True,
+            )
+        if skipped_missing:
+            print(
+                f"         Skipped {len(skipped_missing)} supplemental field(s) "
+                "whose parent object is not present in this org: "
+                f"{', '.join(sorted(skipped_missing))}",
+                flush=True,
+            )
 
     # Enforce predefined object exclusions at field level as a final guard.
     if EXCLUDED_OBJECT_API_NAMES:
