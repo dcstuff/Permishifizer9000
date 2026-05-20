@@ -58,7 +58,7 @@ FIELD_QUERY_SUPPLEMENTAL_OBJECTS = [
 # set UI. Each entry is injected verbatim into fieldPermissions provided
 # its parent object is not excluded.
 FIELD_PERMISSION_SUPPLEMENTAL_FIELDS = {
-    "DisputeItemChargeBack.CardBrand",
+    "DisputeItemChargeback.CardBrand",
     "Idea.Attachment",
 }
 
@@ -634,11 +634,15 @@ def metadata_list_recordtype_fullnames(org):
 
 
 def is_excluded_event_object(object_api_name):
-    return object_api_name.endswith("ChangeEvent") or object_api_name.endswith("__e")
+    lower = (object_api_name or "").lower()
+    return lower.endswith("changeevent") or lower.endswith("__e")
+
+
+_EXCLUDED_OBJECT_API_NAMES_LOWER = {n.lower() for n in EXCLUDED_OBJECT_API_NAMES}
 
 
 def is_excluded_predefined_object(object_api_name):
-    return object_api_name in EXCLUDED_OBJECT_API_NAMES
+    return (object_api_name or "").lower() in _EXCLUDED_OBJECT_API_NAMES_LOWER
 
 
 def is_excluded_object(object_api_name):
@@ -878,11 +882,20 @@ def main():
     valid_object_names = {
         obj for obj in all_entity_def_names if not is_excluded_object(obj)
     }
+    # Case-insensitive lookups from lowercase API name -> canonical org casing.
+    canonical_entity_lookup = {name.lower(): name for name in all_entity_def_names}
+    valid_canonical_lookup = {name.lower(): name for name in valid_object_names}
     # objectPermissions values come from a permission picklist; keep only values
-    # that also resolve as concrete objects in the exclusion-filtered EntityDefinition set.
-    object_permission_names = [
-        obj for obj in picklist_object_names if obj in valid_object_names
-    ]
+    # that also resolve as concrete objects in the exclusion-filtered EntityDefinition
+    # set. Matching is case-insensitive so constants like
+    # OBJECT_PERMISSION_SUPPLEMENTAL_OBJECTS need not match the org's exact casing.
+    seen_object_permission_names = set()
+    object_permission_names = []
+    for obj in picklist_object_names:
+        canonical = valid_canonical_lookup.get((obj or "").lower())
+        if canonical and canonical not in seen_object_permission_names:
+            object_permission_names.append(canonical)
+            seen_object_permission_names.add(canonical)
 
     print(
         f"         Using {len(object_permission_names)} objects for objectPermissions.",
@@ -956,23 +969,27 @@ def main():
 
     # Inject explicitly-listed supplemental fields that are valid in
     # fieldPermissions but absent from both EntityParticle and FieldDefinition
-    # (for example DisputeItemChargeBack.CardBrand). Entries whose parent
+    # (for example DisputeItemChargeback.CardBrand). Entries whose parent
     # object is excluded or not present in the org are skipped so the
     # generated permission set always deploys cleanly.
     if FIELD_PERMISSION_SUPPLEMENTAL_FIELDS:
         injected = 0
         skipped_missing = []
+        existing_fields_lower = {f.lower() for f in permissionable_fields}
         for field_api in FIELD_PERMISSION_SUPPLEMENTAL_FIELDS:
             if "." not in field_api:
                 continue
-            obj_name = field_api.split(".", 1)[0]
+            obj_name, field_name = field_api.split(".", 1)
             if is_excluded_object(obj_name):
                 continue
-            if obj_name not in all_entity_def_names:
+            canonical_obj = canonical_entity_lookup.get(obj_name.lower())
+            if not canonical_obj:
                 skipped_missing.append(field_api)
                 continue
-            if field_api not in permissionable_fields:
-                permissionable_fields.add(field_api)
+            canonical_field_api = f"{canonical_obj}.{field_name}"
+            if canonical_field_api.lower() not in existing_fields_lower:
+                permissionable_fields.add(canonical_field_api)
+                existing_fields_lower.add(canonical_field_api.lower())
                 injected += 1
         if injected:
             print(
