@@ -428,6 +428,50 @@ def run_sf_org_display(target_org, sf_invoker):
     return decode_subprocess_output(proc.stdout)
 
 
+def run_sf_org_auth_show_access_token(target_org, sf_invoker):
+    sf_args = ["org", "auth", "show-access-token", "--json"]
+    if target_org:
+        sf_args.extend(["--target-org", target_org])
+
+    cmd = build_sf_command(sf_invoker, sf_args)
+
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=False,
+            check=False,
+            timeout=SF_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        die(
+            "Error: Salesforce CLI command timed out.\n"
+            f"  Command: {' '.join(shlex.quote(part) for part in cmd)}\n"
+            f"  Timeout: {SF_COMMAND_TIMEOUT_SECONDS}s"
+        )
+    except OSError as exc:
+        die(f"Error: Failed to invoke Salesforce CLI: {exc}")
+
+    if proc.returncode != 0:
+        stderr = decode_subprocess_output(proc.stderr).strip()
+        stdout = decode_subprocess_output(proc.stdout).strip()
+        details = stderr or stdout or "No additional output from Salesforce CLI."
+        die(
+            "Error: `sf org auth show-access-token --json` failed.\n"
+            f"  Command: {' '.join(shlex.quote(part) for part in cmd)}\n"
+            f"  Details: {details}\n"
+            "  Hint: This command requires Salesforce CLI with the `show-access-token` topic.\n"
+            "  Update the CLI: `sf update` (or reinstall from https://developer.salesforce.com/tools/salesforcecli)."
+        )
+
+    # Note: this command emits a sensitive-token warning to stderr by design.
+    # Do not forward it to the user's stderr to avoid leaking the warning verbatim
+    # in logs; the JSON result is what we care about.
+
+    return decode_subprocess_output(proc.stdout)
+
+
 def run_sf_project_deploy(output_file, target_org, sf_invoker, wait_minutes):
     sf_args = [
         "project",
@@ -804,9 +848,29 @@ def main():
     result = org_info.get("result", {})
     print(f"Connected to Salesforce org: {connected_org_display(result, target_org)}")
 
-    access_token = result.get("accessToken", "")
     instance_url = result.get("instanceUrl", "").rstrip("/")
     api_version = str(result.get("apiVersion", "") or "").strip()
+
+    # `sf org display` no longer returns accessToken (Salesforce CLI security
+    # update — see https://github.com/forcedotcom/cli/issues/3560). Fetch it
+    # via the dedicated `sf org auth show-access-token` command instead.
+    token_info_json = run_sf_org_auth_show_access_token(target_org, sf_invoker)
+    if not token_info_json.strip():
+        die("Error: Salesforce CLI returned empty output for show-access-token.")
+
+    try:
+        token_info = json.loads(token_info_json)
+    except json.JSONDecodeError:
+        die(
+            "Error: Could not parse `sf org auth show-access-token --json` output.\n"
+            "  Ensure the Salesforce CLI is up to date: `sf update`."
+        )
+
+    if token_info.get("status", 0) != 0:
+        message = token_info.get("message") or "Unknown Salesforce CLI error."
+        die(f"Error: Salesforce CLI returned a failure status fetching access token.\n  {message}")
+
+    access_token = (token_info.get("result") or {}).get("accessToken", "")
 
     if not access_token or not instance_url:
         die("Error: Could not extract accessToken/instanceUrl from org info.\n  Run: sf org login web")

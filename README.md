@@ -582,6 +582,7 @@ The script executes four sequential phases against the target org's APIs:
 |---------|-------|-----|
 | `Error: Salesforce CLI (sf) was not runnable` | `sf` not installed or not on `PATH` | Install the [Salesforce CLI](https://developer.salesforce.com/tools/salesforcecli) and restart your shell |
 | `Error: Could not parse org display output` | Org not authenticated or token expired | Re-authenticate: `sf org login web --alias myOrg` |
+| `Error: \`sf org auth show-access-token --json\` failed` | Salesforce CLI is outdated and lacks the `show-access-token` subcommand | Update the CLI: `sf update` (or reinstall from https://developer.salesforce.com/tools/salesforcecli) |
 | `Error: HTTP 401 during REST query` | Access token expired mid-run | Re-authenticate and re-run |
 | `Error: No objects returned` | Org connectivity issue or insufficient permissions | Verify the authenticated user has API and metadata access |
 | `Error: Timeout after 90s` | Slow org or network | Retry; consider running closer to the Salesforce instance |
