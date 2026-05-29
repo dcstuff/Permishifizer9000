@@ -72,6 +72,7 @@ The following categories are **intentionally excluded** because they are event s
 | **Python**              | 3.12 or later                                                                                    |
 | **Salesforce CLI (`sf`)** | Installed and on `PATH`. [Install guide](https://developer.salesforce.com/tools/salesforcecli) |
 | **Authenticated org**   | At least one org authenticated via `sf org login web` or `sf org login sfdx-url`                |
+| **User Permissions**    | The authenticated user requires: <br> • **API Enabled** (`ApiEnabled`) <br> • **Customize Application** (`CustomizeApplication`) <br> • **Manage Profiles and Permission Sets** (`ManageProfilesPermissionsets`) <br> • **Modify Metadata Through Metadata API Functions** (`ModifyMetadata`) |
 
 > **Note:** No third-party Python packages are required — the script uses only the standard library.
 
